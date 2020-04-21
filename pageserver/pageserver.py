@@ -22,7 +22,11 @@ log = logging.getLogger(__name__)
 
 import socket    # Basic TCP/IP communication on the internet
 import _thread   # Response computation runs concurrently with main program
+import os
 
+
+
+DOCROOT = "."
 
 def listen(portnum):
     """
@@ -77,6 +81,23 @@ STATUS_FORBIDDEN = "HTTP/1.0 403 Forbidden\n\n"
 STATUS_NOT_FOUND = "HTTP/1.0 404 Not Found\n\n"
 STATUS_NOT_IMPLEMENTED = "HTTP/1.0 401 Not Implemented\n\n"
 
+def get_options():
+    """
+    Options from command line or configuration file.
+    Returns namespace object with option value for port
+    """
+    # Defaults from configuration files;
+    #   on conflict, the last value read has precedence
+    options = config.configuration()
+    # We want: PORT, DOCROOT, possibly LOGGING
+
+    if options.PORT <= 1000:
+        log.warning(("Port {} selected. " +
+                         " Ports 0..1000 are reserved \n" +
+                         "by the operating system").format(options.port))
+
+    return options
+
 
 def respond(sock):
     """
@@ -88,11 +109,28 @@ def respond(sock):
     request = str(request, encoding='utf-8', errors='strict')
     log.info("--- Received request ----")
     log.info("Request was {}\n***\n".format(request))
-
+    bad = ("~","//","..")
+    good = ('.html','.css')
     parts = request.split()
+    options = get_options()
     if len(parts) > 1 and parts[0] == "GET":
-        transmit(STATUS_OK, sock)
-        transmit(CAT, sock)
+        if any(s in parts[1] for s in bad):
+            log.info("Unhandled request: {}".format(request))
+            transmit(STATUS_FORBIDDEN, sock)
+            transmit("\nI don't handle this request: {}\n".format(request), sock)
+        elif any(s in parts[1] for s in good):
+            source_path = os.path.join(options.DOCROOT, parts[1])
+            log.debug("Source path: {}".format(source_path))
+            try: 
+                with open(parts[1], 'r', encoding='utf-8') as source:
+                    for line in source:
+                        transmit(STATUS_OK, sock)
+                        transmit(line.strip(), sock)
+            except OSError as error:
+                log.info("Unhandled request: {}".format(request))
+                transmit(STATUS_NOT_FOUND, sock)
+                transmit("\nI don't handle this request: {}\n".format(request), sock)
+
     else:
         log.info("Unhandled request: {}".format(request))
         transmit(STATUS_NOT_IMPLEMENTED, sock)
@@ -117,27 +155,13 @@ def transmit(msg, sock):
 ###
 
 
-def get_options():
-    """
-    Options from command line or configuration file.
-    Returns namespace object with option value for port
-    """
-    # Defaults from configuration files;
-    #   on conflict, the last value read has precedence
-    options = config.configuration()
-    # We want: PORT, DOCROOT, possibly LOGGING
-
-    if options.PORT <= 1000:
-        log.warning(("Port {} selected. " +
-                         " Ports 0..1000 are reserved \n" +
-                         "by the operating system").format(options.port))
-
-    return options
 
 
 def main():
+    global DOCROOT
     options = get_options()
     port = options.PORT
+    DOCROOT = options.DOCROOT
     if options.DEBUG:
         log.setLevel(logging.DEBUG)
     sock = listen(port)
